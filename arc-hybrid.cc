@@ -496,9 +496,8 @@ public:
 				}
 			}
 			unsigned act_to_take = best_a; // greedy (when testing)
-
 			if (build_training_graph) {
-				// compute dynamic oracle
+				// compute dynamic oracle and check if the argmax is right
 				vector<unsigned> dynamic_oracle;
 				string act;
 				for (unsigned aci : current_valid_actions) {
@@ -506,6 +505,8 @@ public:
 					if (isActionZeroCost(act, stacki, bufferi, gold_head, gold_deprel, gold_children))
 						dynamic_oracle.push_back(aci);
 				}
+				if (find(dynamic_oracle.begin(), dynamic_oracle.end(), best_a) != dynamic_oracle.end())
+					++right;
 
 				// accumulate loss, well multi-label hinge has to be computed manually
 				unsigned best_oraclei = dynamic_oracle[0];
@@ -534,7 +535,6 @@ public:
 					act_to_take = best_wrongi;
 				} else {
 					act_to_take = best_oraclei;
-					++right;
 				}
 			}
 
