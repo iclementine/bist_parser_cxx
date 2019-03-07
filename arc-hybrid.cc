@@ -620,8 +620,9 @@ public:
 
 class Learner : public ILearner<Sentence, Stat> {
 public:
-	explicit Learner(ArcHybridLSTM& t_parser, unsigned t_data_size) :
-		parser(t_parser), data_size(t_data_size) {
+	explicit Learner(ArcHybridLSTM& t_parser, Trainer& t_trainer, 
+									 string t_model_params, string t_trainer_state, unsigned t_data_size) :
+		parser(t_parser), trainer(t_trainer), model_params(t_model_params), trainer_state(t_trainer_state), data_size(t_data_size) {
 	}
 
 	~Learner() {}
@@ -644,11 +645,15 @@ public:
 	}
 
 	void SaveModel() {
-		TextFileSaver s("lstm-parser.model"); s.save(parser.pc);
+		TextFileSaver s(model_params); s.save(parser.pc);
+		ofstream os(trainer_state); trainer.save(os);
 	}
 
 private:
 	ArcHybridLSTM& parser;
+	Trainer& trainer;
+	string model_params;
+	string trainer_state;
 	unsigned data_size;
 };
 
@@ -778,7 +783,7 @@ int main(int argc, char** argv) {
 	                     input_dim, pos_dim, layers, lstm_dim, window_size, hidden1_dim,
 	                     hidden2_dim, vocab_size, pos_size, use_head, use_rl, use_rl_most,
 	                     use_pos, use_pretrained, exp_prob, pretrained);
-
+	AdamTrainer trainer(model);
 	/*
 	ComputationGraph hg;
 	Sentence example = corpus.train_sentences[100];
@@ -797,8 +802,7 @@ int main(int argc, char** argv) {
 	                                 example.deprel, hyp_rel, example.form.size());
 	parser.output_conll(example.form, example.pos, hyp, hyp_rel);
 	*/
-	Learner learner(parser, corpus.train_sentences.size());
-	AdamTrainer trainer(model);
+	Learner learner(parser, trainer, param, trainer_state, corpus.train_sentences.size());
 	run_single_process(&learner, &trainer, corpus.train_sentences, corpus.dev_sentences,
 	                   epoch, corpus.train_sentences.size(), status_every_i_iterations, 1) ;
 	return 0;
