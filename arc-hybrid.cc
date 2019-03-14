@@ -611,7 +611,8 @@ public:
 	}
 
 	friend ostream& operator<<(ostream& stream, const Stat& stat) {
-		stream << "loss per action: " << exp(double(stat.tot_loss) / stat.num_prediction)
+		// since there is no probabilistic interpretation, ppl is meaningless
+		stream << "loss per action: " << double(stat.tot_loss) / stat.num_prediction
 		       << "\tuas: " << double(stat.right_head) / stat.num_token
 		       << "\tlas: " << double(stat.right_rel) / stat.num_token;
 		return stream;
@@ -620,8 +621,8 @@ public:
 
 class Learner : public ILearner<Sentence, Stat> {
 public:
-	explicit Learner(ArcHybridLSTM& t_parser, Trainer& t_trainer, 
-									 string t_model_params, string t_trainer_state, unsigned t_data_size) :
+	explicit Learner(ArcHybridLSTM& t_parser, Trainer& t_trainer,
+	                 string t_model_params, string t_trainer_state, unsigned t_data_size) :
 		parser(t_parser), trainer(t_trainer), model_params(t_model_params), trainer_state(t_trainer_state), data_size(t_data_size) {
 	}
 
@@ -657,6 +658,85 @@ private:
 	unsigned data_size;
 };
 
+template<class D, class S>
+void run_single_process2(ILearner<D, S>* learner, Trainer* trainer, const std::vector<D>& train_data,
+    const std::vector<D>& dev_data, unsigned num_iterations, unsigned dev_frequency, unsigned report_frequency, unsigned batch_size) {
+  std::vector<unsigned> train_indices(train_data.size());
+  std::iota(train_indices.begin(), train_indices.end(), 0);
+
+  std::vector<unsigned> dev_indices(dev_data.size());
+  std::iota(dev_indices.begin(), dev_indices.end(), 0);
+	
+	float init_lr = trainer->learning_rate;
+
+  S best_dev_loss = S();
+  bool first_dev_run = true;
+  unsigned batch_counter = 0;
+  for (unsigned iter = 0; iter < num_iterations && !stop_requested; ++iter) {
+    // Shuffle the training data indices
+    std::shuffle(train_indices.begin(), train_indices.end(), *rndeng);
+
+    S train_loss = S();
+
+    unsigned data_processed = 0;
+    unsigned data_until_report = report_frequency;
+    std::vector<unsigned>::iterator begin = train_indices.begin();
+    while (begin != train_indices.end()) {
+      std::vector<unsigned>::iterator end = begin + dev_frequency;
+      if (end > train_indices.end()) {
+        end = train_indices.end();
+      }
+      S batch_loss;
+      for (auto it = begin; it != end; ++it) {
+        unsigned i = *it;
+        DYNET_ASSERT(i < train_data.size(), "Out-of-bounds ID in train set for multiprocessing");
+        const D& datum = train_data[i];
+        S datum_loss = learner->LearnFromDatum(datum, true);
+        batch_loss += datum_loss;
+        train_loss += datum_loss;
+        if (++batch_counter == batch_size) {
+          // TODO: The scaling was originally this
+          // trainer->update(1.0 / batch_size); 
+          trainer->update(); 
+          batch_counter = 0;
+        }
+        data_processed++;
+
+        if (--data_until_report == 0) {
+					trainer->status();
+          data_until_report = report_frequency;
+          double fractional_iter = iter + 1.0 * data_processed / train_indices.size();
+          std::cerr << fractional_iter << "\t" << "loss = " << batch_loss << std::endl;
+          batch_loss = S();
+        }
+      }
+      
+      trainer ->learning_rate = init_lr / (1 + 0.1 * iter);
+
+      S dev_loss = S();
+      for (auto it = dev_indices.begin(); it != dev_indices.end(); ++it) {
+        unsigned i = *it;
+        DYNET_ASSERT(i < dev_data.size(), "Out-of-bounds ID in dev set for multiprocessing");
+        const D& datum = dev_data[i];
+        S datum_loss = learner->LearnFromDatum(datum, false);
+        dev_loss += datum_loss;
+      }
+      bool new_best = (first_dev_run || dev_loss < best_dev_loss);
+      first_dev_run = false;
+      double fractional_iter = iter + 1.0 * data_processed / train_indices.size();
+      std::cerr << fractional_iter << "\t" << "dev loss = " << dev_loss << (new_best ? " (New best!)" : "") << std::endl;
+      if (stop_requested) {
+        break;
+      }
+      if (new_best) {
+        learner->SaveModel();
+        best_dev_loss = dev_loss;
+      }
+
+      begin = end;
+    }
+  }
+}
 
 int main(int argc, char** argv) {
 	// parse command line args and prepare args for ParserBuilder
@@ -783,27 +863,38 @@ int main(int argc, char** argv) {
 	                     input_dim, pos_dim, layers, lstm_dim, window_size, hidden1_dim,
 	                     hidden2_dim, vocab_size, pos_size, use_head, use_rl, use_rl_most,
 	                     use_pos, use_pretrained, exp_prob, pretrained);
-	AdamTrainer trainer(model);
-	/*
-	ComputationGraph hg;
-	Sentence example = corpus.train_sentences[100];
-	// cerr << example.form << endl << example.pos << endl << example.head << endl << example.deprel << endl;
-	// Result result = parser.hinge_parser(hg, example.formi, example.posi, example.head, example.depreli);
-	Result result = parser.hinge_parser(hg, example.formi, example.posi, {}, {});
-	cerr << result.actions << endl
-	     << as_scalar(hg.incremental_forward(result.loss)) << endl
-	     << result.num_prediction << " predictions" << endl
-	     << result.right << "right" << endl;
+	if (conf.count("train")) {
+		SimpleSGDTrainer trainer(model);
+		if (conf.count("resume")) {
+			cerr << "Loading model parameters from " << param << endl 
+					<< "Loading trainer state from " << trainer_state << endl;
+			TextFileLoader l(param); l.populate(model);
+			ifstream is(trainer_state); trainer.populate(is);
+		}
+		Learner learner(parser, trainer, param, trainer_state, corpus.train_sentences.size());
+		run_single_process2(&learner, &trainer, corpus.train_sentences, corpus.dev_sentences,
+		                   epoch, corpus.train_sentences.size(), status_every_i_iterations, 1);
+// 		run_multi_process(4, &learner, &trainer, corpus.train_sentences, corpus.dev_sentences,
+// 		                   epoch, corpus.train_sentences.size(), status_every_i_iterations);
+	} else {
+		cerr << "Loading model parameters from " << param << endl;
+		TextFileLoader l(param); l.populate(model);
+		for (auto& sent : corpus.test_sentences) {
+			ComputationGraph hg;
+			// Result result = parser.hinge_parser(hg, sent.formi, sent.posi, sent.head, sent.depreli);
+			Result result = parser.hinge_parser(hg, sent.formi, sent.posi, {}, {});
+// 			cerr << result.actions << endl
+// 			     << as_scalar(hg.incremental_forward(result.loss)) << endl
+// 			     << result.num_prediction << " predictions" << endl
+// 			     << result.right << "right" << endl;
 
-	vector<int> hyp; vector<string> hyp_rel;
-	tie(hyp, hyp_rel) = parser.compute_heads(example.form.size(), result.actions);
-	unsigned correct_head = 0; unsigned correct_rel = 0;
-	tie(correct_head, correct_rel) = parser.compute_correct(example.head, hyp,
-	                                 example.deprel, hyp_rel, example.form.size());
-	parser.output_conll(example.form, example.pos, hyp, hyp_rel);
-	*/
-	Learner learner(parser, trainer, param, trainer_state, corpus.train_sentences.size());
-	run_single_process(&learner, &trainer, corpus.train_sentences, corpus.dev_sentences,
-	                   epoch, corpus.train_sentences.size(), status_every_i_iterations, 1) ;
+			vector<int> hyp; vector<string> hyp_rel;
+			tie(hyp, hyp_rel) = parser.compute_heads(sent.form.size(), result.actions);
+//			unsigned correct_head = 0; unsigned correct_rel = 0;
+// 			tie(correct_head, correct_rel) = parser.compute_correct(sent.head, hyp,
+// 			                                 sent.deprel, hyp_rel, sent.form.size());
+			parser.output_conll(sent.form, sent.pos, hyp, hyp_rel);
+		}
+	}
 	return 0;
 }
