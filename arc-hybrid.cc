@@ -666,8 +666,6 @@ void run_single_process2(ILearner<D, S>* learner, Trainer* trainer, const std::v
 
   std::vector<unsigned> dev_indices(dev_data.size());
   std::iota(dev_indices.begin(), dev_indices.end(), 0);
-	
-	float init_lr = trainer->learning_rate;
 
   S best_dev_loss = S();
   bool first_dev_run = true;
@@ -711,7 +709,7 @@ void run_single_process2(ILearner<D, S>* learner, Trainer* trainer, const std::v
         }
       }
       
-      trainer ->learning_rate = init_lr / (1 + 0.1 * iter);
+      trainer ->learning_rate *= 0.9;
 
       S dev_loss = S();
       for (auto it = dev_indices.begin(); it != dev_indices.end(); ++it) {
@@ -864,7 +862,7 @@ int main(int argc, char** argv) {
 	                     hidden2_dim, vocab_size, pos_size, use_head, use_rl, use_rl_most,
 	                     use_pos, use_pretrained, exp_prob, pretrained);
 	if (conf.count("train")) {
-		SimpleSGDTrainer trainer(model);
+		AdamTrainer trainer(model);
 		if (conf.count("resume")) {
 			cerr << "Loading model parameters from " << param << endl 
 					<< "Loading trainer state from " << trainer_state << endl;
