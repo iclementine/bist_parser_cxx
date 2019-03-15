@@ -509,14 +509,14 @@ public:
 					++right;
 
 				// accumulate loss, well multi-label hinge has to be computed manually
-				unsigned worst_oraclei = dynamic_oracle[0];
-				float worst_oracle = std::numeric_limits<float>::max();
+				unsigned best_oraclei = dynamic_oracle[0];
+				float best_oracle = -std::numeric_limits<float>::max();
 				unsigned best_wrongi = current_valid_actions[0];
 				float best_wrong = -std::numeric_limits<float>::max();
 				for (unsigned aci : current_valid_actions) {
 					if (find(dynamic_oracle.begin(), dynamic_oracle.end(), aci) != dynamic_oracle.end()) {
-						if (scores[aci] < worst_oracle) {
-							worst_oracle = scores[aci]; worst_oraclei = aci;
+						if (scores[aci] > best_oracle) {
+							best_oracle = scores[aci]; best_oraclei = aci;
 						}
 					} else {
 						if (scores[aci] > best_wrong) {
@@ -525,8 +525,8 @@ public:
 					}
 				}
 
-				if (worst_oracle < best_wrong + 1.0) {
-					Expression loss_t = pick(scores_e, best_wrongi) - pick(scores_e, worst_oraclei);
+				if (best_oracle < best_wrong + 1.0) {
+					Expression loss_t = pick(scores_e, best_wrongi) - pick(scores_e, best_oraclei);
 					step_losses.push_back(loss_t);
 				}
 
@@ -534,7 +534,7 @@ public:
 				if (rand01() < p_agg) {
 					act_to_take = best_wrongi;
 				} else {
-					act_to_take = worst_oraclei;
+					act_to_take = best_oraclei;
 				}
 			}
 
