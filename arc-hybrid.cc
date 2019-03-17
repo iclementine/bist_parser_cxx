@@ -526,16 +526,13 @@ public:
 				}
 
 				if (best_oracle < best_wrong + 1.0) {
-					Expression loss_t = pick(scores_e, best_wrongi) - pick(scores_e, best_oraclei);
+					Expression loss_t = 1.0 + pick(scores_e, best_wrongi) - pick(scores_e, best_oraclei);
 					step_losses.push_back(loss_t);
 				}
 
 				// choose action
-				if (rand01() < p_agg) {
-					act_to_take = best_wrongi;
-				} else {
-					act_to_take = best_oraclei;
-				}
+				act_to_take = (best_oracle > best_wrong + 1.0) ||
+				              (best_oracle > best_wrong && rand01() > p_agg) ? best_oraclei : best_wrongi;
 			}
 
 			// apply action
